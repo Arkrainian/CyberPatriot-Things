@@ -872,6 +872,35 @@ function Set-ServiceHardening {
             Add-ReportItem -RequirementId "SVC-CRITICAL-$($svc.Name)" -Description "Critical service '$($svc.Name)' left untouched and running" -Source 'README: Critical Services' -Status $status -Actual $svc.Status -Expected 'Running (never modified by this script)'
         }
     }
+
+    # Windows Features (role services/components, distinct from the services
+    # loop above) called out as commonly-unneeded in the Week 09 Intermediate
+    # Windows + Server Review deck: Internet Explorer 11, Print and Document
+    # Services, RIP Listener, Telnet Client, TFTP Client. SMB 1.0/CIFS is
+    # handled separately in the SMB region (Set-SmbHardening), and Internet
+    # Information Services is explicitly never touched here - it is the
+    # README's named critical service.
+    if (Get-Command Get-WindowsFeature -ErrorAction SilentlyContinue) {
+        $featurePatterns = 'Internet-Explorer-Optional|Print-Services|RIP|Telnet-Client|TFTP-Client'
+        $unneededFeatures = Get-WindowsFeature | Where-Object {
+            $_.Installed -and ($_.Name -match $featurePatterns -or $_.DisplayName -match 'Internet Explorer 11|Print and Document Services|RIP Listener|Telnet Client|TFTP Client') -and
+            $_.Name -ne 'Web-Server'
+        }
+        foreach ($feature in $unneededFeatures) {
+            Invoke-Hardening -Description "Remove unneeded Windows Feature '$($feature.DisplayName)'" -Action {
+                Uninstall-WindowsFeature -Name $feature.Name -ErrorAction SilentlyContinue | Out-Null
+            }
+            Add-ReportItem -RequirementId "FEAT-$($feature.Name)" -Description "Unneeded Windows Feature '$($feature.DisplayName)' removed" -Source 'Week 09 deck: Programs and Features' `
+                -Status 'WARNING' -Actual 'Installed' -Expected 'Removed' -ActionTaken 'Removed via Uninstall-WindowsFeature'
+        }
+        if (-not $unneededFeatures) {
+            Add-ReportItem -RequirementId 'FEAT-00' -Description 'Unneeded Windows Features (IE11, Print Services, RIP Listener, Telnet/TFTP Client) absent' -Source 'Week 09 deck: Programs and Features' `
+                -Status 'PASS' -Actual 'None installed' -Expected 'None installed'
+        }
+    } else {
+        Add-ReportItem -RequirementId 'FEAT-00' -Description 'Unneeded Windows Features reviewed' -Source 'Week 09 deck: Programs and Features' `
+            -Status 'MANUAL REVIEW' -Actual 'Get-WindowsFeature unavailable' -Expected 'Reviewed'
+    }
 }
 
 #endregion SERVER SERVICES
@@ -1031,6 +1060,7 @@ function Set-SecurityOptionsRegistry {
     $lanman    = 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters'
     $lanmanWks = 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters'
     $policyPol = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+    $netlogon  = 'HKLM:\SYSTEM\CurrentControlSet\Services\Netlogon\Parameters'
 
     Backup-RegistryKey -KeyPath 'HKLM\SYSTEM\CurrentControlSet\Control\Lsa' -FileName 'lsa_before.reg'
     Backup-RegistryKey -KeyPath 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -FileName 'policies_system_before.reg'
@@ -1044,6 +1074,7 @@ function Set-SecurityOptionsRegistry {
         @{ Path=$lanman;    Name='EnableSecuritySignature'; Type='DWord'; Value=1; Id='SEC-04b'; Desc='Microsoft network server: Digitally sign communications (if client agrees)'; Src='Vulnerabilities table' }
         @{ Path=$lanman;    Name='AutoDisconnect'; Type='DWord'; Value=15; Id='SEC-05'; Desc='Microsoft network server: idle time before suspending session (15 min)'; Src='Vulnerabilities table' }
         @{ Path=$lanman;    Name='EnableForcedLogOff'; Type='DWord'; Value=1; Id='SEC-06'; Desc='Disconnect clients when logon hours expire'; Src='Vulnerabilities table' }
+        @{ Path=$netlogon;  Name='MaximumPasswordAge'; Type='DWord'; Value=90; Id='SEC-06b'; Desc='Maximum machine account password age (90 days)'; Src='Week 09 deck: Security Options table' }
         @{ Path=$lsaPath;   Name='NoLMHash'; Type='DWord'; Value=1; Id='SEC-07'; Desc='Do not store LAN Manager hash value on next password change'; Src='Vulnerabilities table' }
         @{ Path=$lsaPath;   Name='LmCompatibilityLevel'; Type='DWord'; Value=5; Id='SEC-08'; Desc='LAN Manager authentication level: Send NTLMv2 response only, refuse LM & NTLM'; Src='Vulnerabilities table' }
         @{ Path=$lsaPath;   Name='RestrictAnonymous'; Type='DWord'; Value=1; Id='SEC-09'; Desc='Do not allow anonymous enumeration of SAM accounts and shares'; Src='Vulnerabilities table' }
